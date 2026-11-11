@@ -56,7 +56,11 @@ RUN echo "apt refresh ${APT_REFRESH}" \
     && rm -rf /var/lib/apt/lists/*
 
 # Install latest PostgreSQL client (pg_dump) from official PostgreSQL apt repository
-RUN curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/postgresql-archive-keyring.gpg \
+# Modified 2026-11-11: retry interrupted key downloads before invoking GPG.
+RUN curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 --max-time 120 \
+        https://www.postgresql.org/media/keys/ACCC4CF8.asc -o /tmp/postgresql-key.asc \
+    && gpg --batch --dearmor -o /usr/share/keyrings/postgresql-archive-keyring.gpg /tmp/postgresql-key.asc \
+    && rm /tmp/postgresql-key.asc \
     && echo "deb [signed-by=/usr/share/keyrings/postgresql-archive-keyring.gpg] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends postgresql-client \
