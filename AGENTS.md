@@ -1,5 +1,38 @@
 # Windmill
 
+## Local AGPL fork (modified 2026-11-11)
+
+This fork at https://github.com/ynonp/windmill removes the active and archived
+workspace count quotas from the AGPL implementation and matching client guards.
+Preserve those changes when merging upstream; do not enable `enterprise` or
+`private`, or bypass license checks to activate proprietary functionality.
+Keep authentication enabled (`no_auth` must not be used on public instances).
+
+Our application build uses `--features oss_core,all_languages,jemalloc` with
+Cargo's empty default feature set. Build the root Dockerfile with
+`--build-arg features=oss_core,all_languages,jemalloc` and
+`--build-arg VITE_SOURCE_URL=https://github.com/ynonp/windmill/tree/<commit>`.
+Set `WM_BUILD_VERSION` to identify the release. For the slim image, build
+`docker/DockerfileSlim` with `BASE_IMAGE` set to that application image. For
+windmill-extra, pass our slim image as `BASE_IMAGE` before building; never use
+the proprietary upstream base.
+
+Production deployment is now defined in `.github/workflows/deploy-oss.yml`
+and `deploy/README.md`: pushes to this fork's main build the published commit,
+publish AGPL-only images to GHCR, and deploy immutable digests through the
+restricted `deploy/github-deploy.sh` receiver. Use the `BASE_IMAGE` build arg
+for both slim and extra Dockerfiles; no Dockerfile text replacement is needed.
+
+Publish the complete corresponding source of the running revision, preserve
+license/copyright notices and modification dates, and retain the visible Help →
+Source code link required for our modified network service (AGPL section 13).
+Publishing a public fork is insufficient if it lacks the running modifications
+or the build instructions. See `LICENSE` and `LICENSE-AGPL`.
+
+For this development machine, the parent workspace's `AGENTS.md` documents
+the existing Podman development containers, runtime quota checks, and deployment
+scripts. Use that container toolchain rather than the host Rust installation.
+
 Open-source platform for internal tools, workflows, API integrations, background jobs, and UIs. Rust backend + Svelte 5 frontend.
 
 ## Workflow

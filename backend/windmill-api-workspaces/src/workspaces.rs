@@ -7387,36 +7387,6 @@ async fn create_workspace_require_superadmin() -> String {
     format!("{}", *CREATE_WORKSPACE_REQUIRE_SUPERADMIN)
 }
 
-async fn _check_nb_of_workspaces(db: &DB) -> Result<()> {
-    let nb_workspaces = sqlx::query_scalar!(
-        "SELECT COUNT(*) FROM workspace WHERE id != 'admins' AND deleted = false",
-    )
-    .fetch_one(db)
-    .await?;
-    if nb_workspaces.unwrap_or(0) >= 2 {
-        return Err(Error::BadRequest(
-            "You have reached the maximum number of workspaces (2 outside of default workspace 'admins') without an enterprise license. Archive/delete another workspace to create a new one"
-                .to_string(),
-        ));
-    }
-    return Ok(());
-}
-
-async fn _check_nb_of_archived_workspaces(db: &DB) -> Result<()> {
-    let nb_archived = sqlx::query_scalar!(
-        "SELECT COUNT(*) FROM workspace WHERE id != 'admins' AND deleted = true",
-    )
-    .fetch_one(db)
-    .await?;
-    if nb_archived.unwrap_or(0) >= 1 {
-        return Err(Error::BadRequest(
-            "You have reached the maximum number of archived workspaces (1) without an enterprise license. Permanently delete or unarchive the existing archived workspace first"
-                .to_string(),
-        ));
-    }
-    return Ok(());
-}
-
 async fn create_workspace(
     authed: ApiAuthed,
     Extension(db): Extension<DB>,
@@ -7425,9 +7395,6 @@ async fn create_workspace(
     if *CREATE_WORKSPACE_REQUIRE_SUPERADMIN {
         require_super_admin(&db, &authed).await?;
     }
-
-    #[cfg(not(feature = "enterprise"))]
-    _check_nb_of_workspaces(&db).await?;
 
     if *CLOUD_HOSTED {
         let nb_workspaces = sqlx::query_scalar!(
@@ -10164,9 +10131,6 @@ async fn create_workspace_fork(
         )));
     }
 
-    #[cfg(not(feature = "enterprise"))]
-    _check_nb_of_workspaces(&db).await?;
-
     enforce_fork_allowed(&db, &authed, &parent_workspace_id).await?;
     enforce_isolated_forks(&db, &authed, &parent_workspace_id, &nw).await?;
 
@@ -11741,11 +11705,6 @@ async fn archive_workspace(
 ) -> Result<String> {
     require_admin(authed.is_admin, &authed.username)?;
 
-    // CE caps the number of archived (soft-deleted) workspaces so archiving can't be used to
-    // stockpile hidden workspaces. Enforced here so a second archive is refused up front.
-    #[cfg(not(feature = "enterprise"))]
-    _check_nb_of_archived_workspaces(&db).await?;
-
     // If this is an attached dev workspace, archiving it leaves the prod with no active dev (the
     // unique index and user_workspaces both ignore deleted=true), so clear the prod's
     // dev_workspace_lock too. Gate it on prod-admin since it removes prod's protection rule (mirrors
@@ -11884,12 +11843,6 @@ async fn unarchive_workspace(
     // Global route (unarchives any workspace by id) gated on the caller's own
     // is_admin claim, so it must reject a job token — see require_instance_admin.
     require_instance_admin(&authed)?;
-
-    // Unarchiving re-activates a soft-deleted workspace, so it must respect the
-    // same CE workspace-count cap as creating one. The archived workspace is
-    // deleted = true and thus excluded from the count until it is restored.
-    #[cfg(not(feature = "enterprise"))]
-    _check_nb_of_workspaces(&db).await?;
 
     let mut tx = db.begin().await?;
     sqlx::query!("UPDATE workspace SET deleted = false WHERE id = $1", &w_id)

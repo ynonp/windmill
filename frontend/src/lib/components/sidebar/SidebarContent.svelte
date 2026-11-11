@@ -104,6 +104,12 @@
 			icon: HelpCircle,
 			subItems: [
 				{
+					label: 'Source code',
+					href: import.meta.env.VITE_SOURCE_URL || 'https://github.com/ynonp/windmill',
+					icon: Github,
+					external: true
+				},
+				{
 					label: 'Docs',
 					href: 'https://www.windmill.dev/docs/intro/',
 					icon: BookOpen,

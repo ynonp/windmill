@@ -1,7 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte'
 	import {
-		enterpriseLicense,
 		maybePremium,
 		roleCapabilities,
 		superadmin,
@@ -149,31 +148,10 @@
 			$workspaceStore !== 'admins' &&
 			(canCreateFork($userStore, $roleCapabilities) || !!devOfRoot)
 	)
-	// A fork is a new workspace, so it's subject to the community-edition cap on
-	// the number of non-'admins' workspaces (backend _check_nb_of_workspaces,
-	// run only on community builds). An enterprise license lifts the cap. We
-	// mirror the backend count with the client-side workspace list to hide the
-	// affordance once the cap is reached; the server still enforces the real
-	// (instance-wide) check on commit, so this is purely UX.
-	const CE_MAX_NON_ADMIN_WORKSPACES = 2
-	const nonAdminWorkspaceCount = $derived($userWorkspaces.filter((w) => w.id !== 'admins').length)
-	const ceWorkspaceCapReached = $derived(
-		!$enterpriseLicense && nonAdminWorkspaceCount >= CE_MAX_NON_ADMIN_WORKSPACES
-	)
-	// The interactive create-fork row is shown unless the cap is reached;
-	// otherwise (structural gate open but cap hit) we surface a disabled row
-	// explaining the limit — never stage a fork the backend would reject.
 	const forkAffordanceOpen = $derived(
 		allowCreateFork && forksGateOpen && (!!onCreateFork || !!onRequestCreateFork) && !!root
 	)
-	// The upsell (CE workspace cap) only applies to in-place inline creation;
-	// onRequestCreateFork delegates to a flow that enforces its own limits.
-	const showCreateFork = $derived(
-		forkAffordanceOpen && (!ceWorkspaceCapReached || !!onRequestCreateFork)
-	)
-	const showForkUpsell = $derived(
-		forkAffordanceOpen && ceWorkspaceCapReached && !onRequestCreateFork
-	)
+	const showCreateFork = $derived(forkAffordanceOpen)
 
 	let dropdownOpen = $state(false)
 	let creatingFork = $state(false)
@@ -536,18 +514,6 @@
 						<span>{createForkLabel}</span>
 					</button>
 				{/if}
-			{:else if showForkUpsell}
-				<div class="my-1 border-t border-border-light shrink-0"></div>
-				<div
-					class={`${rowBase} opacity-60 cursor-not-allowed`}
-					aria-disabled="true"
-					title="Community edition is limited to {CE_MAX_NON_ADMIN_WORKSPACES +
-						1} workspaces. Archive a workspace or upgrade to an enterprise license to create more forks."
-				>
-					<Plus size={14} class="shrink-0 text-tertiary" />
-					<span>{createForkLabel}</span>
-					<span class="ml-auto shrink-0 text-2xs text-tertiary"> Workspace limit reached </span>
-				</div>
 			{/if}
 			{#if settingsHref}
 				<!-- Pinned footer: stays visible while the fork list above scrolls. -->

@@ -34,6 +34,8 @@ RUN make
 
 FROM ${RUST_IMAGE} AS rust_base
 
+ARG CARGO_BUILD_JOBS=2
+
 RUN apt-get update && apt-get install -y git libssl-dev pkg-config npm mold clang
 
 RUN apt-get -y update \
@@ -93,6 +95,7 @@ RUN npm run generate-backend-client
 ENV NODE_OPTIONS "--max-old-space-size=8192"
 # Must be declared for the build-arg to reach the bundle. See frontend/svelte.config.js.
 ARG WM_BUILD_VERSION=""
+ARG VITE_SOURCE_URL="https://github.com/ynonp/windmill"
 # Read more about macro in docker/dev.nu
 # -- MACRO-SPREAD-WASM-PARSER-DEV-ONLY -- #
 RUN npm run build

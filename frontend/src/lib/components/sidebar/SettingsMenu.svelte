@@ -116,6 +116,12 @@
 
 	const helpItems: Item[] = [
 		{
+			displayName: 'Source code',
+			icon: Github,
+			href: import.meta.env.VITE_SOURCE_URL || 'https://github.com/ynonp/windmill',
+			hrefTarget: '_blank'
+		},
+		{
 			displayName: 'Docs',
 			icon: BookOpen,
 			href: 'https://www.windmill.dev/docs/intro/',
