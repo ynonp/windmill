@@ -46,6 +46,9 @@ two parallel stages and a 4-GiB frontend Node heap. Tune with adequate available
 RAM: `CARGO_BUILD_JOBS=6 BUILD_STAGES=1 bash deploy/local.sh build`. No other
 services or builds are stopped. The first full build can be substantially slower
 than the 15–20 minute warm-build target. Phase timings provide the benchmark.
+The script maps `CARGO_BUILD_JOBS` to the application-only `APP_BUILD_JOBS`
+Docker argument; the toolchain's job count stays fixed so tuning compilation
+does not invalidate the tool installation layers.
 
 State defaults to `<parent of fork>/.windmill-build/`:
 

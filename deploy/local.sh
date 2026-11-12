@@ -46,7 +46,7 @@ main() {
     if ! image_matches "$app"; then
         podman build --layers --jobs "$stages" --format docker \
             --build-arg features=oss_core,all_languages,jemalloc \
-            --build-arg "CARGO_BUILD_JOBS=$jobs" --build-arg DUCKDB_BUILD_JOBS=2 \
+            --build-arg CARGO_BUILD_JOBS=4 --build-arg "APP_BUILD_JOBS=$jobs" --build-arg DUCKDB_BUILD_JOBS=2 \
             --build-arg "WM_BUILD_VERSION=oss-$REVISION" \
             --build-arg "VITE_SOURCE_URL=https://github.com/ynonp/windmill/tree/$REVISION" \
             "${labels[@]}" -t "$app" -f "$src/Dockerfile" "$src"
