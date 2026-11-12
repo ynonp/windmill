@@ -123,9 +123,6 @@ RUN apt-get update && apt-get install -y libxml2-dev=2.12.* libxmlsec1-dev=1.2.*
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-ARG APP_BUILD_JOBS=4
-ENV CARGO_BUILD_JOBS=$APP_BUILD_JOBS
-
 RUN --mount=type=cache,id=wm-cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=wm-cargo-git,target=/usr/local/cargo/git \
     --mount=type=cache,id=wm-rust-sccache,target=/backend/sccache \
@@ -140,6 +137,9 @@ RUN mkdir -p /frontend
 COPY --from=frontend /frontend/build /frontend/build
 COPY --from=frontend /backend/windmill-api/openapi-deref.yaml ./windmill-api/openapi-deref.yaml
 COPY .git/ .git/
+
+ARG APP_BUILD_JOBS=4
+ENV CARGO_BUILD_JOBS=$APP_BUILD_JOBS
 
 RUN --mount=type=cache,id=wm-cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=wm-cargo-git,target=/usr/local/cargo/git \
