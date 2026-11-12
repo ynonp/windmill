@@ -94,8 +94,12 @@ main() {
     app_digest=$(cat "$STATE/app.digest")
     extra_digest=$(cat "$STATE/extra.digest")
     echo "TIMING transfer $((SECONDS-phase))s"; phase=$SECONDS
-    # Run the receiver from the same published snapshot as the images.
-    "${ssh_cmd[@]}" "bash -s -- '$REVISION' '$app_digest' '$extra_digest'" < "$src/deploy/local-receive.sh"
+    # Read the complete script before execution: Docker commands may consume stdin.
+    local receipt="$STATE/deploy-$REVISION.receipt"
+    "${ssh_cmd[@]}" "bash -c \"\$(cat)\" -- '$REVISION' '$app_digest' '$extra_digest'" < "$src/deploy/local-receive.sh" | tee "$receipt"
+    grep -Fxq -- "Deployed $REVISION" "$receipt" || {
+        echo 'Receiver did not confirm the verified production switch' >&2; return 1;
+    }
     echo "TIMING deploy $((SECONDS-phase))s"
     echo "TIMING total $((SECONDS-started))s"
 }

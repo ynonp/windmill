@@ -84,6 +84,9 @@ pulls by the exact returned manifest digests and verifies source/revision labels
 HTTP registry traffic stays on loopback or inside SSH. No GitHub token or
 registry password is needed. `local-receive.sh` is streamed from the snapshot;
 no separately installed receiver can drift from the image's source revision.
+The SSH command reads the entire receiver into memory before running Docker,
+so child commands cannot consume pending shell input. A missing verified
+`Deployed <SHA>` receipt fails the local run even if SSH exits successfully.
 
 The receiver takes `/opt/windmill/.deploy.lock` (shared with the retired GitHub
 receiver), verifies public main, backs up PostgreSQL and `.env`, atomically
