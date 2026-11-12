@@ -402,6 +402,7 @@ const config = {
 		https: process.env.HTTPS === 'true',
 		allowedHosts: [
 			'localhost',
+			'devbox',
 			'127.0.0.1',
 			'0.0.0.0',
 			'rubendev.wimill.xyz',

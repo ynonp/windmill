@@ -19,6 +19,78 @@ use windmill_common::variables::{build_crypt, decrypt, encrypt};
 
 use crate::oauth::{no_redirect_http_client_pinned, AuthorizationManager};
 
+#[derive(Deserialize)]
+pub struct McpTokenResponse {
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "windmill_common::more_serde::maybe_number_opt"
+    )]
+    pub expires_in: Option<u64>,
+    pub scope: Option<String>,
+    pub token_type: String,
+}
+
+impl McpTokenResponse {
+    pub fn validate(&self) -> error::Result<()> {
+        if self.access_token.is_empty() || !self.token_type.eq_ignore_ascii_case("bearer") {
+            return Err(error::Error::BadRequest(
+                "MCP OAuth requires a Bearer access token".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+pub async fn refresh_mcp_token(
+    db: &DB,
+    server_url: &str,
+    refresh_token: &str,
+    scopes: Option<&[String]>,
+) -> error::Result<McpTokenResponse> {
+    // A refresh grant belongs to its registered client; registering a replacement cannot renew it.
+    let registered: McpOAuthClient = sqlx::query_as(
+        "SELECT mcp_server_url, client_id, client_secret, client_secret_expires_at, token_endpoint FROM mcp_oauth_client WHERE mcp_server_url = $1",
+    ).bind(server_url).fetch_optional(db).await?
+        .filter(|client: &McpOAuthClient| !client.is_expired())
+        .ok_or_else(|| error::Error::BadRequest("MCP OAuth client expired or missing; reconnect the server".into()))?;
+    let credentials = registered.credentials(db).await?;
+    let (client, endpoint) = credentials
+        .token_request()
+        .map_err(|_| error::Error::InternalErr("Failed to build MCP token client".into()))?;
+    let mut form = vec![
+        ("grant_type", "refresh_token"),
+        ("refresh_token", refresh_token),
+        ("client_id", credentials.client_id.as_str()),
+        ("resource", server_url),
+    ];
+    let scope = scopes.unwrap_or_default().join(" ");
+    if !scope.is_empty() {
+        form.push(("scope", &scope));
+    }
+    if let Some(secret) = &credentials.client_secret {
+        form.push(("client_secret", secret));
+    }
+    let response = client
+        .post(endpoint)
+        .form(&form)
+        .send()
+        .await
+        .map_err(|_| error::Error::BadRequest("MCP OAuth refresh request failed".into()))?;
+    if !response.status().is_success() {
+        return Err(error::Error::BadRequest(
+            "MCP OAuth refresh was refused; reconnect the server".into(),
+        ));
+    }
+    let token: McpTokenResponse = response
+        .json()
+        .await
+        .map_err(|_| error::Error::BadRequest("Invalid MCP OAuth refresh response".into()))?;
+    token.validate()?;
+    Ok(token)
+}
+
 /// MCP client credentials returned by [`get_or_refresh_mcp_client`].
 pub struct McpClientCredentials {
     pub client_id: String,
@@ -52,6 +124,24 @@ struct McpOAuthClient {
 }
 
 impl McpOAuthClient {
+    async fn credentials(self, db: &DB) -> error::Result<McpClientCredentials> {
+        let token_endpoint_target = windmill_common::ssrf::validate_mcp_server_url_for_bad_request(
+            &self.token_endpoint,
+            "MCP server token endpoint URL",
+        )
+        .await?;
+        let client_secret = match self.client_secret {
+            Some(secret) => Some(decrypt_client_secret(db, &secret).await?),
+            None => None,
+        };
+        Ok(McpClientCredentials {
+            client_id: self.client_id,
+            client_secret,
+            token_endpoint: self.token_endpoint,
+            token_endpoint_target,
+        })
+    }
+
     fn is_expired(&self) -> bool {
         if let Some(expires_at) = self.client_secret_expires_at {
             expires_at < chrono::Utc::now().naive_utc()
@@ -161,23 +251,7 @@ pub async fn get_or_refresh_mcp_client(
     if let Some(client) = cached_client {
         if !client.is_expired() {
             tracing::debug!("Using cached MCP client for {}", mcp_server_url);
-            let token_endpoint_target =
-                windmill_common::ssrf::validate_mcp_server_url_for_bad_request(
-                    &client.token_endpoint,
-                    "MCP server token endpoint URL",
-                )
-                .await?;
-            let decrypted_secret = if let Some(ref encrypted_secret) = client.client_secret {
-                Some(decrypt_client_secret(db, encrypted_secret).await?)
-            } else {
-                None
-            };
-            return Ok(McpClientCredentials {
-                client_id: client.client_id,
-                client_secret: decrypted_secret,
-                token_endpoint: client.token_endpoint,
-                token_endpoint_target,
-            });
+            return client.credentials(db).await;
         }
         tracing::debug!("Cached MCP client expired, re-registering");
     }
@@ -269,6 +343,21 @@ pub async fn get_or_refresh_mcp_client(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oauth_token_response_accepts_string_expiry_and_requires_bearer() {
+        let token: McpTokenResponse = serde_json::from_value(serde_json::json!({
+            "access_token": "access", "token_type": "bearer", "expires_in": "0"
+        }))
+        .unwrap();
+        assert_eq!(token.expires_in, Some(0));
+        assert!(token.validate().is_ok());
+        let unsupported: McpTokenResponse = serde_json::from_value(serde_json::json!({
+            "access_token": "access", "token_type": "mac"
+        }))
+        .unwrap();
+        assert!(unsupported.validate().is_err());
+    }
     use std::{
         io::{ErrorKind, Read},
         net::TcpListener,

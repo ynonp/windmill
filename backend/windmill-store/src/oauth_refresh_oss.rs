@@ -13,9 +13,6 @@ use windmill_common::db::DB;
 use windmill_common::error::{self, Error};
 use windmill_oauth::{OAuthAccountInfo, RefreshError, RefreshedToken};
 
-#[cfg(feature = "private")]
-pub use crate::oauth_refresh_ee::_refresh_token;
-
 /// The `account` row a refresh starts from.
 pub struct RefreshAccount {
     pub mcp_server_url: Option<String>,
@@ -211,7 +208,6 @@ pub(crate) async fn exchange_standard(
     .await
 }
 
-#[cfg(not(feature = "private"))]
 pub async fn _refresh_token(
     path: &str,
     w_id: &str,
@@ -219,8 +215,224 @@ pub async fn _refresh_token(
     db: &DB,
     force: bool,
 ) -> error::Result<String> {
+    #[cfg(feature = "mcp")]
+    {
+        let is_mcp: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM account WHERE workspace_id = $1 AND id = $2 AND client = 'mcp')",
+        ).bind(w_id).bind(id).fetch_one(db).await?;
+        if is_mcp {
+            return refresh_mcp_account(path, w_id, id, db, force, false)
+                .await?
+                .ok_or_else(|| Error::InternalErr("MCP refresh unexpectedly skipped".into()));
+        }
+    }
+    #[cfg(feature = "private")]
+    return crate::oauth_refresh_ee::_refresh_token(path, w_id, id, db, force).await;
+    #[cfg(not(feature = "private"))]
     refresh_account_token(db, w_id, path, id, force, |account| async move {
         exchange_standard(db, w_id, id, &account.info).await
     })
     .await
+}
+
+#[cfg(feature = "mcp")]
+pub async fn refresh_mcp_account_background(
+    path: &str,
+    w_id: &str,
+    id: i32,
+    db: &DB,
+) -> error::Result<()> {
+    refresh_mcp_account(path, w_id, id, db, false, true)
+        .await
+        .map(|_| ())
+}
+
+#[cfg(feature = "mcp")]
+async fn refresh_mcp_account(
+    path: &str,
+    w_id: &str,
+    id: i32,
+    db: &DB,
+    force: bool,
+    background: bool,
+) -> error::Result<Option<String>> {
+    // Rotating tokens are single-use. Hold this lock through the exchange, secret writes,
+    // and retry-state update so replicas cannot retry a failure before its cooldown is saved.
+    let mut lock = db.begin().await?;
+    if background {
+        let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(1464683843, $1)")
+            .bind(id)
+            .fetch_one(&mut *lock)
+            .await?;
+        if !acquired {
+            return Ok(None);
+        }
+        let due: bool = sqlx::query_scalar(
+            "SELECT EXISTS(
+                SELECT 1 FROM account a
+                LEFT JOIN mcp_oauth_refresh_state s
+                  ON s.workspace_id = a.workspace_id AND s.account_id = a.id
+                WHERE a.workspace_id = $1 AND a.id = $2 AND a.client = 'mcp'
+                  AND a.expires_at <= now() AND a.refresh_token <> ''
+                  AND (s.next_attempt_at IS NULL OR s.next_attempt_at <= now())
+            )",
+        )
+        .bind(w_id)
+        .bind(id)
+        .fetch_one(&mut *lock)
+        .await?;
+        if !due {
+            return Ok(None);
+        }
+    } else {
+        sqlx::query("SELECT pg_advisory_xact_lock(1464683843, $1)")
+            .bind(id)
+            .execute(&mut *lock)
+            .await?;
+    }
+
+    let result = refresh_account_token(db, w_id, path, id, force, |account| async move {
+        let server = account
+            .mcp_server_url
+            .as_deref()
+            .ok_or_else(|| Error::BadRequest("MCP account has no server URL".into()))?;
+        let token = windmill_mcp::client_registration::refresh_mcp_token(
+            db,
+            server,
+            &account.info.refresh_token,
+            account.info.scopes.as_deref(),
+        )
+        .await
+        .map_err(|_| {
+            RefreshError::Provider("MCP OAuth refresh failed; reconnect the server".into())
+        })?;
+        Ok(RefreshedToken {
+            access_token: token.access_token,
+            refresh_token: token.refresh_token,
+            expires_in: token
+                .expires_in
+                .and_then(|v| i64::try_from(v).ok())
+                .unwrap_or(3600),
+        })
+    })
+    .await;
+
+    if result.is_ok() {
+        sqlx::query(
+            "DELETE FROM mcp_oauth_refresh_state WHERE workspace_id = $1 AND account_id = $2",
+        )
+        .bind(w_id)
+        .bind(id)
+        .execute(&mut *lock)
+        .await?;
+    } else {
+        // SELECT avoids recreating retry state if the account was deleted during the exchange.
+        sqlx::query(
+            "INSERT INTO mcp_oauth_refresh_state AS s
+                (workspace_id, account_id, failure_count, next_attempt_at)
+             SELECT workspace_id, id, 1, clock_timestamp() + interval '1 minute'
+             FROM account WHERE workspace_id = $1 AND id = $2
+             ON CONFLICT (workspace_id, account_id) DO UPDATE
+             SET failure_count = LEAST(s.failure_count + 1, 32),
+                 next_attempt_at = clock_timestamp() +
+                     LEAST(3600, 60 * power(2, LEAST(s.failure_count, 6))) * interval '1 second'",
+        )
+        .bind(w_id)
+        .bind(id)
+        .execute(&mut *lock)
+        .await?;
+    }
+    lock.commit().await?;
+    result.map(Some)
+}
+
+#[cfg(all(test, feature = "mcp"))]
+mod mcp_retry_tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL pointing at a migrated development database"]
+    async fn cooldown_serializes_replicas_but_allows_on_demand_recovery() -> anyhow::Result<()> {
+        let db = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(5)
+            .connect(&std::env::var("DATABASE_URL")?)
+            .await?;
+        let workspace = format!("mcp-retry-{}", uuid::Uuid::new_v4().simple());
+        sqlx::query("INSERT INTO workspace (id, name, owner) VALUES ($1, $1, 'test')")
+            .bind(&workspace)
+            .execute(&db)
+            .await?;
+        let result: anyhow::Result<()> = async {
+            sqlx::query("INSERT INTO workspace_key (workspace_id, kind, key) VALUES ($1, 'cloud', 'retry-test')")
+                .bind(&workspace).execute(&db).await?;
+            let id: i32 = sqlx::query_scalar(
+                "INSERT INTO account (workspace_id, client, refresh_token, expires_at)
+                 VALUES ($1, 'mcp', 'unused', now() - interval '1 hour') RETURNING id",
+            ).bind(&workspace).fetch_one(&db).await?;
+            let path = "u/test/mcp_retry";
+            let stored = crate::secret_backend_ext::store_secret_value(&db, &workspace, path, "recovered").await?;
+            sqlx::query("INSERT INTO variable (workspace_id, path, value, is_secret, account) VALUES ($1, $2, $3, true, $4)")
+                .bind(&workspace).bind(path).bind(stored).bind(id).execute(&db).await?;
+
+            // No server URL: deterministic failure without contacting a provider.
+            assert!(refresh_mcp_account_background(path, &workspace, id, &db).await.is_err());
+            let first: (i32, f64) = sqlx::query_as(
+                "SELECT failure_count, extract(epoch FROM next_attempt_at - clock_timestamp())::float8
+                 FROM mcp_oauth_refresh_state WHERE workspace_id = $1 AND account_id = $2",
+            ).bind(&workspace).bind(id).fetch_one(&db).await?;
+            assert_eq!(first.0, 1);
+            assert!((50.0..=60.0).contains(&first.1));
+            refresh_mcp_account_background(path, &workspace, id, &db).await?;
+            let count: i32 = sqlx::query_scalar("SELECT failure_count FROM mcp_oauth_refresh_state WHERE workspace_id = $1 AND account_id = $2")
+                .bind(&workspace).bind(id).fetch_one(&db).await?;
+            assert_eq!(count, 1, "another sweep must respect the persisted cooldown");
+
+            assert!(_refresh_token(path, &workspace, id, &db, false).await.is_err());
+            let second: (i32, f64) = sqlx::query_as(
+                "SELECT failure_count, extract(epoch FROM next_attempt_at - clock_timestamp())::float8
+                 FROM mcp_oauth_refresh_state WHERE workspace_id = $1 AND account_id = $2",
+            ).bind(&workspace).bind(id).fetch_one(&db).await?;
+            assert_eq!(second.0, 2, "on-demand requests bypass cooldown");
+            assert!((110.0..=120.0).contains(&second.1));
+
+            sqlx::query("UPDATE mcp_oauth_refresh_state SET failure_count = 32, next_attempt_at = now() - interval '1 second' WHERE workspace_id = $1")
+                .bind(&workspace).execute(&db).await?;
+            let mut held = db.begin().await?;
+            sqlx::query("SELECT pg_advisory_xact_lock(1464683843, $1)").bind(id).execute(&mut *held).await?;
+            tokio::time::timeout(std::time::Duration::from_secs(2), refresh_mcp_account_background(path, &workspace, id, &db)).await??;
+            held.rollback().await?;
+            assert!(refresh_mcp_account_background(path, &workspace, id, &db).await.is_err());
+            let capped: (i32, f64) = sqlx::query_as(
+                "SELECT failure_count, extract(epoch FROM next_attempt_at - clock_timestamp())::float8
+                 FROM mcp_oauth_refresh_state WHERE workspace_id = $1 AND account_id = $2",
+            ).bind(&workspace).bind(id).fetch_one(&db).await?;
+            assert_eq!(capped.0, 32);
+            assert!((3590.0..=3600.0).contains(&capped.1));
+
+            sqlx::query("UPDATE account SET expires_at = now() + interval '1 hour' WHERE workspace_id = $1 AND id = $2")
+                .bind(&workspace).bind(id).execute(&db).await?;
+            assert_eq!(_refresh_token(path, &workspace, id, &db, false).await?, "recovered");
+            let remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM mcp_oauth_refresh_state WHERE workspace_id = $1")
+                .bind(&workspace).fetch_one(&db).await?;
+            assert_eq!(remaining, 0, "successful on-demand reads clear retry state");
+            Ok(())
+        }.await;
+        sqlx::query("DELETE FROM variable WHERE workspace_id = $1")
+            .bind(&workspace)
+            .execute(&db)
+            .await?;
+        sqlx::query("DELETE FROM account WHERE workspace_id = $1")
+            .bind(&workspace)
+            .execute(&db)
+            .await?;
+        sqlx::query("DELETE FROM workspace_key WHERE workspace_id = $1")
+            .bind(&workspace)
+            .execute(&db)
+            .await?;
+        sqlx::query("DELETE FROM workspace WHERE id = $1")
+            .bind(&workspace)
+            .execute(&db)
+            .await?;
+        result
+    }
 }

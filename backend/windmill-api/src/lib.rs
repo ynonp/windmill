@@ -221,8 +221,6 @@ mod mcp_tools;
 
 #[cfg(feature = "mcp")]
 mod mcp;
-#[cfg(all(feature = "mcp", feature = "private"))]
-mod mcp_oauth_ee;
 #[cfg(feature = "mcp")]
 mod mcp_oauth_oss;
 
@@ -418,6 +416,11 @@ pub async fn run_server(
     name: Option<String>,
 ) -> anyhow::Result<()> {
     let user_db = UserDB::new(db.clone());
+
+    #[cfg(feature = "mcp")]
+    if server_mode {
+        mcp_oauth_oss::spawn_refresh_loop(db.clone(), killpill_rx.resubscribe());
+    }
 
     for x in [&*HUB_CACHE_DIR] {
         DirBuilder::new()

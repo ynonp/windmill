@@ -28404,7 +28404,7 @@ paths:
   /mcp/oauth/start:
     get:
       summary: start MCP OAuth popup flow
-      description: Opens in a popup, discovers OAuth metadata, registers client, and redirects to OAuth provider
+      description: Requires a live browser session cookie. Discovers OAuth metadata, registers client, stores a session-bound single-use flow, and redirects the popup to the OAuth provider.
       operationId: startMcpOAuthPopup
       tags:
         - mcp_oauth
@@ -28427,19 +28427,24 @@ paths:
 
   /mcp/oauth/callback:
     get:
-      security: []
       summary: MCP OAuth callback
-      description: Handles OAuth callback, exchanges code for tokens, returns HTML that posts message to opener
+      description: Requires the initiating browser session cookie. Consumes the unexpired flow once before exchanging the code for tokens, then returns HTML that posts a message to the opener. A failed exchange requires starting a new flow.
       operationId: mcpOAuthCallback
       tags:
         - mcp_oauth
       parameters:
         - name: code
           in: query
-          required: true
+          required: false
           schema:
             type: string
           description: OAuth authorization code
+        - name: error
+          in: query
+          required: false
+          schema:
+            type: string
+          description: OAuth authorization error, including consent denial
         - name: state
           in: query
           required: true

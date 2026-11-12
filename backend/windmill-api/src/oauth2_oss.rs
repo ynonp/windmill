@@ -48,7 +48,109 @@ pub fn global_service() -> Router {
 
 #[cfg(not(feature = "private"))]
 pub fn workspaced_service() -> Router {
-    Router::new()
+    let router = Router::new();
+    #[cfg(feature = "oauth2")]
+    return router
+        .route("/create_account", axum::routing::post(create_mcp_account))
+        .route("/refresh_token/{id}", axum::routing::post(refresh_account));
+    #[cfg(not(feature = "oauth2"))]
+    router
+}
+
+#[cfg(all(feature = "oauth2", not(feature = "private")))]
+#[derive(Deserialize)]
+struct CreateMcpAccount {
+    client: String,
+    refresh_token: String,
+    expires_in: i64,
+    mcp_server_url: String,
+    scopes: Option<Vec<String>>,
+    variable: windmill_common::variables::CreateVariable,
+}
+
+#[cfg(all(feature = "oauth2", not(feature = "private")))]
+async fn create_mcp_account(
+    authed: windmill_api_auth::ApiAuthed,
+    axum::Extension(db): axum::Extension<DB>,
+    axum::Extension(user_db): axum::Extension<windmill_common::db::UserDB>,
+    axum::Extension(webhook): axum::Extension<windmill_common::webhook::WebhookShared>,
+    axum::extract::Path(w_id): axum::extract::Path<String>,
+    Json(mut request): Json<CreateMcpAccount>,
+) -> error::JsonResult<Option<i32>> {
+    if request.client != "mcp" || request.refresh_token.is_empty() || request.expires_in < 0 {
+        return Err(error::Error::BadRequest(
+            "Expected an MCP OAuth account with a refresh token".into(),
+        ));
+    }
+    windmill_common::ssrf::validate_mcp_server_url_for_bad_request(
+        &request.mcp_server_url,
+        "MCP server URL",
+    )
+    .await?;
+    request.variable.is_secret = true;
+    request.variable.is_oauth = Some(true);
+    let account = windmill_store::variables::NewOAuthAccount {
+        client: request.client,
+        refresh_token: Some(request.refresh_token),
+        expires_in: request.expires_in,
+        mcp_server_url: Some(request.mcp_server_url),
+        scopes: request.scopes,
+        grant_type: "authorization_code".into(),
+        cc_client_id: None,
+        cc_client_secret: None,
+        cc_token_url: None,
+    };
+    Ok(Json(
+        windmill_store::variables::create_variable_with_account(
+            authed,
+            &db,
+            user_db,
+            &webhook,
+            w_id,
+            request.variable,
+            false,
+            Some(account),
+        )
+        .await?,
+    ))
+}
+
+#[cfg(all(feature = "oauth2", not(feature = "private")))]
+#[derive(Deserialize)]
+struct RefreshAccountRequest {
+    path: String,
+}
+
+#[cfg(all(feature = "oauth2", not(feature = "private")))]
+async fn refresh_account(
+    authed: windmill_api_auth::ApiAuthed,
+    axum::Extension(db): axum::Extension<DB>,
+    axum::Extension(user_db): axum::Extension<windmill_common::db::UserDB>,
+    axum::extract::Path((w_id, id)): axum::extract::Path<(String, i32)>,
+    Json(request): Json<RefreshAccountRequest>,
+) -> error::Result<String> {
+    windmill_api_auth::check_scopes(&authed, || format!("variables:read:{}", request.path))?;
+    let mut tx = user_db.begin(&authed).await?;
+    let authorized: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM variable WHERE workspace_id = $1 AND path = $2 AND account = $3 AND is_secret)",
+    ).bind(&w_id).bind(&request.path).bind(id).fetch_one(&mut *tx).await?;
+    if !authorized {
+        return Err(error::Error::NotFound(
+            "OAuth token variable not found".into(),
+        ));
+    }
+    windmill_audit::audit_oss::audit_log(
+        &mut *tx,
+        &authed,
+        "variables.decrypt_secret",
+        windmill_audit::ActionKind::Execute,
+        &w_id,
+        Some(&request.path),
+        None,
+    )
+    .await?;
+    tx.commit().await?;
+    windmill_store::oauth_refresh_oss::_refresh_token(&request.path, &w_id, id, &db, false).await
 }
 
 #[cfg(not(feature = "private"))]
@@ -133,16 +235,16 @@ async fn list_connects() -> windmill_common::error::JsonResult<Vec<String>> {
 
 #[cfg(not(feature = "private"))]
 pub async fn _refresh_token(
-    _path: &str,
-    _w_id: &str,
-    _id: i32,
-    _db: &DB,
-    _force: bool,
+    path: &str,
+    w_id: &str,
+    id: i32,
+    db: &DB,
+    force: bool,
 ) -> error::Result<String> {
-    // Implementation is not open source
-    Err(error::Error::BadRequest(
-        "Not implemented in Windmill's Open Source repository".to_string(),
-    ))
+    #[cfg(feature = "oauth2")]
+    return windmill_store::oauth_refresh_oss::_refresh_token(path, w_id, id, db, force).await;
+    #[cfg(not(feature = "oauth2"))]
+    Err(error::Error::BadRequest("Requires oauth2 feature".into()))
 }
 
 #[cfg(not(feature = "private"))]

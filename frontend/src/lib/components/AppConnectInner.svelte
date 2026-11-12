@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { run } from 'svelte/legacy'
+	import McpConnect from './mcp/McpConnect.svelte'
 
 	import { userStore } from '$lib/stores'
 	import LabelsInput from './LabelsInput.svelte'
@@ -1400,6 +1401,15 @@
 				/>
 			</div>
 		</div>
+	{:else if step == 2 && resourceType === 'mcp' && !fillPath && !native && effectiveWorkspace}
+		<McpConnect
+			workspace={effectiveWorkspace}
+			bordered={false}
+			onConnected={(_workspace, resourcePath) => {
+				dispatch('refresh', resourcePath)
+				dispatch('close')
+			}}
+		/>
 	{:else if step == 2 && manual}
 		<div class="flex flex-col gap-4">
 			{#if !emptyString(resourceTypeInfo?.description)}

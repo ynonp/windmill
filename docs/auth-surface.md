@@ -1,5 +1,21 @@
 # Auth surface: facts that are easy to get wrong
 
+- **AGPL MCP OAuth implementation** (modified 2026-11-12): external MCP connections
+  support discovery, dynamic client registration or client metadata documents, and
+  PKCE authorization. Refresh tokens are stored with secret variables; expired
+  accounts refresh on demand or through a bounded background sweep. Advisory locks
+  serialize rotating refresh tokens, and persisted retry cooldowns bound failures
+  across replicas. Custom servers use the “Sign in with OAuth” button label.
+
+- **Connecting to external MCP servers** (modified 2026-11-11): `/api/mcp/oauth/start`
+  and `/callback` require the same live browser login session (`token` cookie and a
+  `token` row labelled `session`). PKCE verifiers stay in `mcp_oauth_pending_flow`,
+  bound to the user's email and session token hash, for at most ten minutes. The
+  callback atomically deletes and returns the matching flow before contacting the
+  provider: denial or exchange failure consumes it too, and retry requires a new
+  flow. Deleting the session cascades to its pending flows; the MCP refresh sweep
+  removes expired rows. No verifier is placed in an OAuth flow cookie.
+
 Symbols, not line numbers, are cited: they drift less.
 
 - **Credential precedence** (`windmill-api-auth/src/auth.rs` `extract_token`): `Authorization: Bearer`

@@ -13,7 +13,7 @@
 	import { MCP_REGISTRY, findMcpEntry, findMcpEntryByUrl } from './registry'
 	import { OauthService, ResourceService } from '$lib/gen'
 	import { upsertSecretVariable } from './secretVariable'
-	import { enterpriseLicense, userStore } from '$lib/stores'
+	import { userStore } from '$lib/stores'
 	import { sendUserToast } from '$lib/toast'
 
 	interface Props {
@@ -129,16 +129,12 @@
 	let awaitingConnects = $derived(hasTarget && !connectsLoaded)
 	// A token is the only way in for some servers and a distraction for others, so
 	// it is offered outright only once detection says nothing here can sign in.
-	let canSignIn = $derived(
-		oauthAppReady || (canDiscover && !!$enterpriseLicense && discoveryFoundOAuth !== false)
-	)
+	let canSignIn = $derived(oauthAppReady || (canDiscover && discoveryFoundOAuth !== false))
 	// Why the token field is the only way in, said where the token is asked for.
 	let tokenNote = $derived(
 		needsOauthApp && entry
 			? `For an OAuth connection, a superadmin can configure a ${entry.name} OAuth app in the instance settings.`
-			: canDiscover && !$enterpriseLicense
-				? 'Signing in to an MCP server is an enterprise feature.'
-				: undefined
+			: undefined
 	)
 
 	$effect(() => {
@@ -410,7 +406,7 @@
 					<OauthScopes bind:scopes />
 				{:else}
 					<div class="flex flex-col gap-1">
-						{#each scopes as scope}
+						{#each scopes as scope (scope)}
 							<div class="py-0.5 pl-2 text-xs">- {scope}</div>
 						{/each}
 					</div>
@@ -421,7 +417,7 @@
 					Could not load the scopes for the {entry.name} connect. Reload to try again.
 				</div>
 			{/if}
-		{:else if canDiscover && $enterpriseLicense}
+		{:else if canDiscover}
 			{#key committedUrl}
 				<McpServerOAuthConnect
 					bind:this={oauthConnect}
@@ -488,7 +484,7 @@
 				>
 					{signingIn ? 'Finish in the popup...' : `Sign in with ${entry.name}`}
 				</Button>
-			{:else if canDiscover && $enterpriseLicense}
+			{:else if canDiscover}
 				<Button
 					unifiedSize="sm"
 					variant="accent"
@@ -498,7 +494,9 @@
 				>
 					{oauthConnect?.isConnecting()
 						? 'Finish in the popup...'
-						: `Sign in with ${entry?.name ?? serverName}`}
+						: entry
+							? `Sign in with ${entry.name}`
+							: 'Sign in with OAuth'}
 				</Button>
 			{/if}
 
@@ -511,7 +509,9 @@
 					onClick={() => (showToken = !showToken)}
 				>
 					{showToken
-						? `Sign in with ${entry?.name ?? serverName} instead`
+						? entry
+							? `Sign in with ${entry.name} instead`
+							: 'Sign in with OAuth instead'
 						: 'Connect with a token instead'}
 				</Button>
 			{/if}

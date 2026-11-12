@@ -114,7 +114,7 @@
 				{/if}
 				{#if isGoogleSignin}
 					<GoogleSigninButton {disabled} onClick={() => appConnectInner?.next()} />
-				{:else}
+				{:else if !(step == 2 && resourceType === 'mcp' && !fillPath && !native)}
 					<Button
 						variant="accent"
 						unifiedSize="md"

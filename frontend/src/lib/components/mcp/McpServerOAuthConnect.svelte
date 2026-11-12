@@ -4,7 +4,6 @@
 	import Label from '$lib/components/Label.svelte'
 	import { sendUserToast } from '$lib/toast'
 	import { upsertSecretVariable } from './secretVariable'
-	import { sameTopDomainOrigin } from '$lib/cookies'
 	import { onDestroy, onMount } from 'svelte'
 
 	interface Props {
@@ -31,8 +30,11 @@
 	let status = $state<'idle' | 'discovering' | 'discovered' | 'connecting'>('idle')
 	let error = $state<string | null>(null)
 	let noOAuth = $state(false)
-	let pending: { workspace: string; path: string; serverUrl: string } | undefined = undefined
+	let pending:
+		| { workspace: string; path: string; serverUrl: string; name: string; scopes: string[] }
+		| undefined = undefined
 	let popup: Window | null = null
+	let popupPoll: ReturnType<typeof setInterval> | undefined
 	let destroyed = false
 
 	async function discoverOAuth() {
@@ -61,9 +63,11 @@
 	}
 
 	function startOAuth() {
+		if (status !== 'discovered' || pending) return
+		error = null
 		// Fixed when the popup opens: the page behind it can move on, and the
 		// callback must still land where the user aimed it.
-		pending = { workspace, path, serverUrl }
+		pending = { workspace, path, serverUrl, name: resourceName, scopes: [...selectedScopes] }
 		const url = new URL(`/api/mcp/oauth/start`, window.location.origin)
 		url.searchParams.set('mcp_server_url', serverUrl)
 		url.searchParams.set('scopes', selectedScopes.join(','))
@@ -76,17 +80,26 @@
 		}
 
 		window.addEventListener('message', handleOAuthMessage)
-		window.addEventListener('storage', handleStorageEvent)
 		status = 'connecting'
+		popupPoll = setInterval(() => {
+			if (popup?.closed) {
+				cleanup()
+				pending = undefined
+				popup = null
+				status = 'discovered'
+				error = 'Authentication window closed. Connect again to retry.'
+			}
+		}, 500)
 	}
 
 	function handleOAuthMessage(event: MessageEvent) {
-		if (!sameTopDomainOrigin(event.origin, window.location.origin)) return
+		if (event.origin !== window.location.origin) return
 
 		// Every connector on the page hears this, so one only takes the completion
 		// for the window it opened — both ways: another connector's completion must
 		// not be taken as ours, nor its failure tear this one down mid-flight.
 		if (event.source !== popup) return
+		if (!pending || !event.data || typeof event.data !== 'object') return
 		if (event.data.type === 'MCP_CONNECTED') {
 			if (event.data.mcp_server_url !== pending?.serverUrl) return
 			cleanup()
@@ -100,35 +113,23 @@
 		}
 	}
 
-	function handleStorageEvent(event: StorageEvent) {
-		if (event.key === 'mcp-oauth-callback') {
-			try {
-				const data = JSON.parse(event.newValue || '{}')
-				if (data.type === 'MCP_CONNECTED') {
-					if (data.mcp_server_url !== pending?.serverUrl) return
-					cleanup()
-					localStorage.removeItem('mcp-oauth-callback')
-					createMcpResource(data)
-				}
-			} catch (e) {
-				console.error('Error parsing MCP OAuth callback', e)
-			}
-		}
-	}
-
 	function cleanup() {
 		window.removeEventListener('message', handleOAuthMessage)
-		window.removeEventListener('storage', handleStorageEvent)
+		clearInterval(popupPoll)
+		popupPoll = undefined
 	}
 
 	async function createMcpResource(data: {
 		access_token: string
 		refresh_token?: string
 		expires_in?: number
+		scope?: string
 		mcp_server_url: string
 	}) {
 		const target = pending
 		if (!target) return
+		pending = undefined
+		popup = null
 		const { workspace, path } = target
 		try {
 			await upsertSecretVariable({
@@ -137,15 +138,15 @@
 				value: data.access_token,
 				resourcePath: path,
 				isOauth: true,
-				account:
-					data.expires_in && data.refresh_token
-						? {
-								refresh_token: data.refresh_token,
-								expires_in: data.expires_in,
-								client: 'mcp',
-								mcp_server_url: data.mcp_server_url
-							}
-						: undefined
+				account: data.refresh_token
+					? {
+							refresh_token: data.refresh_token,
+							expires_in: data.expires_in ?? 3600,
+							client: 'mcp',
+							scopes: data.scope?.split(/\s+/).filter(Boolean) ?? target.scopes,
+							mcp_server_url: data.mcp_server_url
+						}
+					: undefined
 			})
 
 			await ResourceService.createResource({
@@ -154,7 +155,7 @@
 					resource_type: 'mcp',
 					path: path,
 					value: {
-						name: resourceName,
+						name: target.name,
 						url: data.mcp_server_url,
 						token: `$var:${path}`
 					},
@@ -209,7 +210,7 @@
 		{#if discoveryResult.scopes_supported && discoveryResult.scopes_supported.length > 0}
 			<Label label="OAuth scopes">
 				<div class="flex flex-col flex-wrap gap-2">
-					{#each discoveryResult.scopes_supported as scope}
+					{#each discoveryResult.scopes_supported as scope (scope)}
 						<label class="flex flex-row items-center gap-2 text-xs cursor-pointer">
 							<input
 								type="checkbox"

@@ -1,0 +1,3 @@
+DROP INDEX idx_variable_oauth_account_secret;
+DROP INDEX idx_account_mcp_refresh_due;
+DROP TABLE mcp_oauth_refresh_state;
