@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Modified 2026-11-12: persistent local AGPL builds, exclusively from public origin/main.
 set -euo pipefail
+# Freeze pending shell input: edits during a long build must not change its execution.
+if [[ -z ${BASH_EXECUTION_STRING:-} ]]; then
+    exec bash -c "$(cat -- "$0")" "$0" "$@"
+fi
 REPO=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
 PUBLIC=https://github.com/ynonp/windmill.git
 STATE=${WINDMILL_BUILD_STATE:-$(dirname "$REPO")/.windmill-build}

@@ -18,6 +18,8 @@ fetch `origin/main` and pin its exact commit. A dirty development checkout is
 left untouched and never becomes the build context. Snapshots are checked for
 cleanliness and reused. Before deployment, local and production both verify
 that the commit is still public main; rerun if main advances.
+The runner freezes its shell input before starting, so edits to deployment
+scripts during a long build cannot change that running invocation.
 
 Images are tagged `localhost/windmill-oss:<full SHA>`,
 `localhost/windmill-oss-slim:<SHA>`, and `localhost/windmill-oss-extra:<SHA>`.
