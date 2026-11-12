@@ -59,16 +59,17 @@ used by other projects.
 
 ## Transfer and production verification
 
-Prerequisites: Bash, Git, Podman, flock, gzip, tee and SSH on the build box;
+Prerequisites: Bash, Git, Podman, Python 3, curl, flock, tee and SSH on the build box;
 Docker Compose, Bash, Python 3, curl, gzip and flock on production. The normal
 administrator SSH key must work with strict host verification. Production's
 Ed25519 fingerprint is `SHA256:HjuuuBHp9OhiAsioEZgNigqdt1Bdwyj4VRYbpFMo2Ss`.
 Default destination: `root@89.58.35.113`; override with `WINDMILL_DEPLOY_HOST`.
 
-Missing images stream as one gzip-compressed Docker archive over SSH, sharing
-common layers. No GitHub token or registry password is needed. Production
-checks exact image IDs, plus source/revision labels. A conflicting existing tag
-fails verification. `local-receive.sh` is streamed from the published snapshot;
+An SSH tunnel binds an ephemeral local loopback port to production's existing
+`127.0.0.1:5000` registry. Podman pushes only missing layers, then production
+pulls by the exact returned manifest digests and verifies source/revision labels.
+HTTP registry traffic stays on loopback or inside SSH. No GitHub token or
+registry password is needed. `local-receive.sh` is streamed from the snapshot;
 no separately installed receiver can drift from the image's source revision.
 
 The receiver takes `/opt/windmill/.deploy.lock` (shared with the retired GitHub

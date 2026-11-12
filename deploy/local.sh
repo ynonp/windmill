@@ -12,6 +12,8 @@ mkdir -p "$STATE/logs" "$STATE/sources"
 exec 9>"$STATE/build.lock"
 flock -n 9 || { echo 'Another local Windmill build/deploy is running' >&2; exit 1; }
 LOG="$STATE/logs/$(date -u +%Y%m%dT%H%M%SZ).log"
+SOCKET="$STATE/tunnel-$$.sock"
+trap 'ssh -S "$SOCKET" -O exit "$HOST" >/dev/null 2>&1 || true' EXIT
 
 current_main() {
     git -C "$REPO" fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
@@ -63,21 +65,21 @@ main() {
     echo "TIMING build-total $((SECONDS-started))s"
     [[ "$MODE" == deploy ]] || return 0
     [[ $(current_main) == "$REVISION" ]] || { echo 'origin/main advanced; rerun to build the latest commit' >&2; return 1; }
-    local app_id extra_id
-    app_id=$(podman image inspect --format '{{.Id}}' "$app")
-    extra_id=$(podman image inspect --format '{{.Id}}' "$extra")
     local -a ssh_cmd=(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=10 "$HOST")
-    # Load only images missing on production; docker-archive deduplicates shared layers.
-    local -a missing=()
-    for image in "$app" "$extra"; do
-        if ! "${ssh_cmd[@]}" "docker image inspect '$image' >/dev/null 2>&1"; then missing+=("$image"); fi
-    done
-    if ((${#missing[@]})); then
-        podman save --format docker-archive --multi-image-archive "${missing[@]}" | gzip -1 | "${ssh_cmd[@]}" 'gzip -dc | docker image load'
-    fi
+    local port app_digest extra_digest
+    port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
+    ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ExitOnForwardFailure=yes \
+        -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -M -S "$SOCKET" -fN \
+        -L "127.0.0.1:$port:127.0.0.1:5000" "$HOST"
+    curl --fail --silent --show-error "http://127.0.0.1:$port/v2/" >/dev/null
+    # The private loopback registry reuses unchanged layers; only SSH crosses the network.
+    podman push --tls-verify=false --digestfile "$STATE/app.digest" "$app" "docker://127.0.0.1:$port/windmill-oss:$REVISION"
+    podman push --tls-verify=false --digestfile "$STATE/extra.digest" "$extra" "docker://127.0.0.1:$port/windmill-oss-extra:$REVISION"
+    app_digest=$(cat "$STATE/app.digest")
+    extra_digest=$(cat "$STATE/extra.digest")
     echo "TIMING transfer $((SECONDS-phase))s"; phase=$SECONDS
     # Run the receiver from the same published snapshot as the images.
-    "${ssh_cmd[@]}" "bash -s -- '$REVISION' '${app_id#sha256:}' '${extra_id#sha256:}'" < "$src/deploy/local-receive.sh"
+    "${ssh_cmd[@]}" "bash -s -- '$REVISION' '$app_digest' '$extra_digest'" < "$src/deploy/local-receive.sh"
     echo "TIMING deploy $((SECONDS-phase))s"
     echo "TIMING total $((SECONDS-started))s"
 }

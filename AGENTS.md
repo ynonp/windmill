@@ -31,7 +31,8 @@ Do not prune build caches routinely. Clean snapshots, the run lock and timing
 logs live in the sibling `.windmill-build/`, outside this checkout and `/tmp`.
 The 15–20 minute warm-build target must be measured, not assumed.
 
-Deployment streams images over administrator SSH, verifies exact image IDs,
+Deployment pushes missing layers through an SSH tunnel to production's loopback
+registry, pulls by immutable digest, verifies
 source/revision labels and public main, backs up PostgreSQL and `.env`, then
 switches Compose and verifies running images and `/api/version`. Concurrent local
 runs are rejected; production uses the shared deployment lock. An advanced main

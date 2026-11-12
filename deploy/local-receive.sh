@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Modified 2026-11-12. Run over the administrator SSH connection by local.sh.
 set -euo pipefail
-[[ $# == 3 && "$1" =~ ^[a-f0-9]{40}$ && "$2" =~ ^[a-f0-9]{64}$ && "$3" =~ ^[a-f0-9]{64}$ ]] || exit 1
+[[ $# == 3 && "$1" =~ ^[a-f0-9]{40}$ && "$2" =~ ^sha256:[a-f0-9]{64}$ && "$3" =~ ^sha256:[a-f0-9]{64}$ ]] || exit 1
 revision=$1
-app="localhost/windmill-oss:$revision"
-extra="localhost/windmill-oss-extra:$revision"
+app="localhost:5000/windmill-oss@$2"
+extra="localhost:5000/windmill-oss-extra@$3"
 cd /opt/windmill
 exec 9>.deploy.lock
 flock -w 1800 9
@@ -12,11 +12,10 @@ main_revision=$(curl --fail --silent --show-error --retry 3 https://api.github.c
     python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])')
 [[ "$main_revision" == "$revision" ]] || { echo 'Public main advanced; refusing stale deployment' >&2; exit 1; }
 for image in "$app" "$extra"; do
+    docker pull "$image"
     [[ $(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image") == "$revision" ]]
     [[ $(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.source"}}' "$image") == https://github.com/ynonp/windmill ]]
 done
-[[ $(docker image inspect --format '{{.Id}}' "$app") == "sha256:$2" ]]
-[[ $(docker image inspect --format '{{.Id}}' "$extra") == "sha256:$3" ]]
 stamp="$(date -u +%Y%m%dT%H%M%SZ)-$revision"
 install -d -m 700 /root/backups
 backup="/root/backups/windmill-$stamp"
