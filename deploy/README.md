@@ -24,6 +24,8 @@ Images are tagged `localhost/windmill-oss:<full SHA>`,
 Only our AGPL `oss_core,all_languages,jemalloc` features are used. Slim and extra
 use our own base images. Source/revision labels and Help → Source code refer
 to the same published commit, including these build instructions.
+Before transfer, the script runs each image's binary with networking disabled
+and checks its reported Git revision, catching stale compiler artifacts locally.
 
 ## Persistent builder and performance
 

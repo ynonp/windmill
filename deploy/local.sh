@@ -24,6 +24,14 @@ image_matches() {
     [[ $(podman image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$1") == "$REVISION" ]] &&
     [[ $(podman image inspect --format '{{index .Config.Labels "org.opencontainers.image.source"}}' "$1") == https://github.com/ynonp/windmill ]]
 }
+verify_binary() {
+    local version
+    version=$(podman run --rm --network none --entrypoint /usr/src/app/windmill "$1" --version)
+    [[ "$version" == "Windmill ${REVISION:0:7}" || "$version" == *$'\n'"Windmill ${REVISION:0:7}" ]] || {
+        echo "Binary revision mismatch in $1: $version" >&2; return 1;
+    }
+    echo "Verified binary revision in $1"
+}
 main() {
     local started=$SECONDS phase=$SECONDS
     REVISION=$(current_main)
@@ -51,6 +59,7 @@ main() {
             --build-arg "VITE_SOURCE_URL=https://github.com/ynonp/windmill/tree/$REVISION" \
             "${labels[@]}" -t "$app" -f "$src/Dockerfile" "$src"
     fi
+    verify_binary "$app"
     echo "TIMING application $((SECONDS-phase))s"; phase=$SECONDS
     if ! image_matches "$slim"; then
         podman build --layers --format docker --build-arg "BASE_IMAGE=$app" "${labels[@]}" \
@@ -62,6 +71,7 @@ main() {
     fi
     echo "TIMING slim-and-extra $((SECONDS-phase))s"; phase=$SECONDS
     image_matches "$app" && image_matches "$extra"
+    verify_binary "$extra"
     echo "TIMING build-total $((SECONDS-started))s"
     [[ "$MODE" == deploy ]] || return 0
     [[ $(current_main) == "$REVISION" ]] || { echo 'origin/main advanced; rerun to build the latest commit' >&2; return 1; }
