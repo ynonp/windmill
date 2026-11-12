@@ -32,7 +32,7 @@ main() {
     echo "Log: $LOG"
     if [[ ! -d "$src" ]]; then
         git init --quiet "$src"
-        git -C "$src" fetch --quiet --depth=1 "$REPO" "$REVISION"
+        git -C "$src" fetch --quiet --no-tags --depth=1 "$REPO" "$REVISION"
         git -C "$src" checkout --quiet --detach "$REVISION"
     fi
     [[ -z $(git -C "$src" status --porcelain) && $(git -C "$src" rev-parse HEAD) == "$REVISION" ]] || {
@@ -70,7 +70,9 @@ main() {
     port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
     ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ExitOnForwardFailure=yes \
         -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -M -S "$SOCKET" -fN \
-        -L "127.0.0.1:$port:127.0.0.1:5000" "$HOST"
+        -L "127.0.0.1:$port:127.0.0.1:5000" "$HOST" </dev/null >"$STATE/tunnel.log" 2>&1 || {
+            cat "$STATE/tunnel.log" >&2; return 1;
+        }
     curl --fail --silent --show-error "http://127.0.0.1:$port/v2/" >/dev/null
     # The private loopback registry reuses unchanged layers; only SSH crosses the network.
     podman push --tls-verify=false --digestfile "$STATE/app.digest" "$app" "docker://127.0.0.1:$port/windmill-oss:$REVISION"
