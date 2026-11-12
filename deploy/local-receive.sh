@@ -20,7 +20,7 @@ stamp="$(date -u +%Y%m%dT%H%M%SZ)-$revision"
 install -d -m 700 /root/backups
 backup="/root/backups/windmill-$stamp"
 umask 077
-docker compose exec --interactive=false -T db pg_dumpall -U postgres | gzip > "$backup.sql.gz"
+docker compose exec -T db pg_dumpall -U postgres </dev/null | gzip > "$backup.sql.gz"
 gzip -t "$backup.sql.gz"
 cp .env "$backup.env"
 echo "Database and configuration backed up to $backup"
