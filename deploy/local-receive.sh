@@ -47,7 +47,7 @@ for service in windmill_server windmill_worker windmill_worker_native windmill_e
     [[ "$service" != windmill_extra ]] || expected=$extra
     [[ -n "$container" && $(docker inspect --format '{{.Config.Image}}' "$container") == "$expected" ]]
 done
-for attempt in $(seq 1 30); do
+for _attempt in $(seq 1 30); do
     version=$(curl --fail --silent --show-error --max-time 10 https://windmill.ynonperek.com/api/version) || version=''
     if [[ "$version" == "CE ${revision:0:7}" ]]; then
         printf '%s\nDeployed %s\nSource: https://github.com/ynonp/windmill/tree/%s\nBackup: %s\n' "$version" "$revision" "$revision" "$backup"
