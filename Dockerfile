@@ -145,7 +145,7 @@ RUN --mount=type=cache,id=wm-cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=wm-cargo-git,target=/usr/local/cargo/git \
     --mount=type=cache,id=wm-rust-sccache,target=/backend/sccache \
     --mount=type=cache,id=wm-rust-release,target=/windmill/target \
-    CARGO_NET_GIT_FETCH_WITH_CLI=true cargo build --release --features "$features" \
+    CARGO_INCREMENTAL=1 RUSTC_WRAPPER= CARGO_NET_GIT_FETCH_WITH_CLI=true cargo build --release --features "$features" \
     && mkdir -p /out && cp target/release/windmill /out/windmill \
     && sccache --show-stats
 

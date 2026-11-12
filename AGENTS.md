@@ -27,6 +27,8 @@ Podman's persistent build engine retains image layers, Cargo registry/git,
 release targets, sccache and npm caches. Defaults: four Cargo jobs, two DuckDB
 jobs, two parallel stages. Tune `CARGO_BUILD_JOBS` and `BUILD_STAGES` to available
 RAM. Keep thin LTO and mold; never use `target-cpu=native` for production.
+The final workspace build uses native incremental compilation and bypasses
+sccache; dependency preparation and DuckDB keep sccache enabled.
 Do not prune build caches routinely. Clean snapshots, the run lock and timing
 logs live in the sibling `.windmill-build/`, outside this checkout and `/tmp`.
 The 15–20 minute warm-build target must be measured, not assumed.

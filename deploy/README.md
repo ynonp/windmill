@@ -38,8 +38,11 @@ Rust installation is used. Run as the same OS user every time. It retains:
 
 Release targets survive source changes; layers retain stable tools and runtime
 packages. Binaries are copied out of cache mounts before image assembly. Thin
-LTO and mold remain enabled; Cargo incremental compilation is disabled for
-sccache compatibility. Production CPU settings remain portable.
+LTO and mold remain enabled. Dependency preparation and DuckDB use sccache;
+the final workspace build bypasses sccache and enables native Rust incremental
+compilation in the persistent release target. This retains query/code-generation
+caches for the large API crate, which sccache cannot supply for incremental
+builds. The first run populates those caches. Production CPU settings stay portable.
 
 Defaults on this shared 12-vCPU, 31-GiB box are four Cargo jobs, two DuckDB jobs,
 two parallel stages and a 4-GiB frontend Node heap. Tune with adequate available
