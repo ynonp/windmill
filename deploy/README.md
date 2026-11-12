@@ -37,7 +37,9 @@ Rust installation is used. Run as the same OS user every time. It retains:
 - Extra-image Go module/compiler, uv, pip and npm caches, reused after base-image changes.
 
 Release targets survive source changes; layers retain stable tools and runtime
-packages. Binaries are copied out of cache mounts before image assembly. Thin
+packages. Revision-bearing binaries/frontend are copied after stable runtime
+installations so new revisions retain that layer prefix. Binaries are copied
+out of cache mounts before image assembly. Thin
 LTO and mold remain enabled. Dependency preparation and DuckDB use sccache;
 the final workspace build bypasses sccache and enables native Rust incremental
 compilation in the persistent release target. This retains query/code-generation

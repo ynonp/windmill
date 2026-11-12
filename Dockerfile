@@ -350,11 +350,6 @@ ENV GOCACHE=/tmp/windmill/cache/go
 
 ENV TZ=Etc/UTC
 
-COPY --from=builder /frontend/build /static_frontend
-COPY --from=builder /out/windmill ${APP}/windmill
-# DuckDB jobs run in this binary, which the worker looks for next to its own.
-COPY --from=windmill_duckdb_ffi_internal_builder /out/windmill_duckdb_runner ${APP}/windmill_duckdb_runner
-
 COPY --from=oven/bun:1.4.4 /usr/local/bin/bun /usr/bin/bun
 
 # Install windmill CLI
@@ -382,6 +377,12 @@ COPY --from=nsjail /nsjail/nsjail /bin/nsjail
 # crane: pulls + flattens images for the sandboxed container runtime (`# sandbox <image>`).
 # Single static binary — no daemon/store/root needed. See docs/docker-v2-runtime.md.
 COPY --from=crane /out/crane /usr/local/bin/crane
+
+# Modified 2026-11-12: keep revision-bearing files after stable runtime installation layers.
+COPY --from=builder /frontend/build /static_frontend
+COPY --from=builder /out/windmill ${APP}/windmill
+# DuckDB jobs run in this binary, which the worker looks for next to its own.
+COPY --from=windmill_duckdb_ffi_internal_builder /out/windmill_duckdb_runner ${APP}/windmill_duckdb_runner
 
 WORKDIR ${APP}
 
