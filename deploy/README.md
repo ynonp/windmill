@@ -1,57 +1,91 @@
-# Production deployment
+# Local production build and deployment
 
-Modified 2026-11-11. `.github/workflows/deploy-oss.yml` deploys each push to
-`main` in https://github.com/ynonp/windmill. Manual reruns are also supported on
-main. Runs are serialized; a superseded commit is never deployed.
+Modified 2026-11-12. Builds and deployments run on the development box, not
+GitHub Actions. Public source: https://github.com/ynonp/windmill.
 
-GitHub-hosted Ubuntu builds the published commit, using only
-`oss_core,all_languages,jemalloc`. It publishes application, slim, and extra
-images to `ghcr.io/ynonp/windmill-oss`, `windmill-oss-slim`, and
-`windmill-oss-extra`. All are tagged with the complete commit SHA. Slim and
-extra use our own base images pinned by digest. The frontend Source code link
-points to the same public commit. Build instructions and the deployment
-receiver are included here in the public source.
+## Daily workflow
 
-Production pulls immutable image digests, verifies their source and revision
-labels, backs up PostgreSQL and `.env`, then runs Docker Compose. The database
-and existing volumes are retained. The GitHub token is used for pulls through
-a temporary Docker config, removed after deployment. No persistent GHCR
-credential is stored on production.
+Commit and push intended changes to `origin/main`, then from the fork run:
 
-## One-time setup and key rotation
+```sh
+bash deploy/local.sh build    # build only, without changing production
+bash deploy/local.sh deploy   # reuse/build images, transfer, back up, deploy
+```
 
-Repository Actions secrets:
+The parent workspace's `deploy/build.sh` and `deploy/deploy.sh` are wrappers.
+Neither accepts a tag, another branch, `SRC`, or a working-tree build. Both
+fetch `origin/main` and pin its exact commit. A dirty development checkout is
+left untouched and never becomes the build context. Snapshots are checked for
+cleanliness and reused. Before deployment, local and production both verify
+that the commit is still public main; rerun if main advances.
 
-- `WINDMILL_DEPLOY_SSH_KEY`: dedicated Ed25519 private key.
-- `WINDMILL_DEPLOY_KNOWN_HOSTS`: verified Ed25519 host key for `89.58.35.113`.
+Images are tagged `localhost/windmill-oss:<full SHA>`,
+`localhost/windmill-oss-slim:<SHA>`, and `localhost/windmill-oss-extra:<SHA>`.
+Only our AGPL `oss_core,all_languages,jemalloc` features are used. Slim and extra
+use our own base images. Source/revision labels and Help → Source code refer
+to the same published commit, including these build instructions.
 
-Install `github-deploy.sh` as `/opt/windmill/github-deploy.sh`, owned by root,
-mode 700. Authorize only the public deployment key in `/root/.ssh/authorized_keys`
-with `restrict,command="/opt/windmill/github-deploy.sh"`. This key permits only
-`check` or the validated deployment command, without forwarding or an interactive
-shell. The host uses the existing `/opt/windmill/compose.yaml` and `.env`.
-Server requirements: Bash, Python 3, curl, gzip, flock, Docker and Compose.
+## Persistent builder and performance
 
-When changing the receiver, review and install it through the administrator's
-regular SSH key before publishing a workflow that needs the new protocol.
-The Actions key cannot install arbitrary shell commands. To rotate the key,
-install the new restricted public key, update the repository secret, test
-`ssh ... check`, then remove the old public key. Never commit either private
-keys or production environment files.
+Podman/Buildah is the persistent build engine; no disposable CI daemon or host
+Rust installation is used. Run as the same OS user every time. It retains:
+
+- Intermediate image layers in existing Podman storage.
+- `wm-cargo-registry`, `wm-cargo-git`, `wm-npm` build cache mounts.
+- Separate `wm-rust-release` and `wm-duckdb-release` Cargo target cache mounts.
+- Separate `wm-rust-sccache` and `wm-duckdb-sccache` compiler caches (30 GB each).
+
+Release targets survive source changes; layers retain stable tools and runtime
+packages. Binaries are copied out of cache mounts before image assembly. Thin
+LTO and mold remain enabled; Cargo incremental compilation is disabled for
+sccache compatibility. Production CPU settings remain portable.
+
+Defaults on this shared 12-vCPU, 31-GiB box are four Cargo jobs, two DuckDB jobs,
+two parallel stages and a 4-GiB frontend Node heap. Tune with adequate available
+RAM: `CARGO_BUILD_JOBS=6 BUILD_STAGES=1 bash deploy/local.sh build`. No other
+services or builds are stopped. The first full build can be substantially slower
+than the 15–20 minute warm-build target. Phase timings provide the benchmark.
+
+State defaults to `<parent of fork>/.windmill-build/`:
+
+- `sources/<SHA>/`: clean detached snapshots.
+- `logs/<UTC timestamp>.log`: output and phase timings.
+- `build.lock`: rejects simultaneous local builds/deploys.
+
+Override with `WINDMILL_BUILD_STATE` on persistent disk, not RAM-backed `/tmp`.
+Do not run `podman system prune` or delete build cache mounts routinely. Removing
+old snapshots/logs does not remove compiler caches. Preserve images and volumes
+used by other projects.
+
+## Transfer and production verification
+
+Prerequisites: Bash, Git, Podman, flock, gzip, tee and SSH on the build box;
+Docker Compose, Bash, Python 3, curl, gzip and flock on production. The normal
+administrator SSH key must work with strict host verification. Production's
+Ed25519 fingerprint is `SHA256:HjuuuBHp9OhiAsioEZgNigqdt1Bdwyj4VRYbpFMo2Ss`.
+Default destination: `root@89.58.35.113`; override with `WINDMILL_DEPLOY_HOST`.
+
+Missing images stream as one gzip-compressed Docker archive over SSH, sharing
+common layers. No GitHub token or registry password is needed. Production
+checks exact image IDs, plus source/revision labels. A conflicting existing tag
+fails verification. `local-receive.sh` is streamed from the published snapshot;
+no separately installed receiver can drift from the image's source revision.
+
+The receiver takes `/opt/windmill/.deploy.lock` (shared with the retired GitHub
+receiver), verifies public main, backs up PostgreSQL and `.env`, atomically
+updates image settings, starts Compose, verifies all application/extra image
+refs and `/api/version`. Existing volumes and credentials stay on production.
+After deployment, also exercise the changed functionality and verify the source
+link. A successful build alone does not validate OAuth against a real provider.
 
 ## Failure and recovery
 
-The first cold Rust build can take several hours. Actions has a six-hour limit
-and uses BuildKit layer caching; a failed build does not change production.
-Inspect the Deploy AGPL Windmill workflow run for build and deployment logs.
+A build/transfer failure leaves production unchanged. Backup paths are printed
+before switching: `/root/backups/windmill-<UTC>-<SHA>.sql.gz` and `.env`.
+Migrations may have run if startup fails: restore the database and matching
+environment together when a downgrade requires it. Never automatically switch
+back across forward migrations. Keep off-host database backups separately.
 
-Backups live under `/root/backups/windmill-<UTC timestamp>-<commit>.sql.gz`,
-with the corresponding `.env` backup alongside. A failed deployment after
-startup may already have applied migrations: do not automatically swap back to
-older images. Restore the database and matching environment backup together
-when a downgrade requires it. Database backups remain on the host; keep a
-separate off-host backup as part of normal operations.
-
-Existing parent-workspace deployment scripts are a manual alternative. To
-ensure routine production changes always come from published source, use
-this workflow for deployments.
+The old `github-deploy.sh` and restricted key remain for historical recovery;
+the Actions workflow was removed. Do not re-enable it alongside local deployment
+without reviewing concurrency and source verification.

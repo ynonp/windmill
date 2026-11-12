@@ -47,6 +47,7 @@ RUN rustup component add rustfmt
 RUN CARGO_NET_GIT_FETCH_WITH_CLI=true cargo install cargo-chef --version 0.1.68
 RUN cargo install sccache --version ^0.8
 ENV RUSTC_WRAPPER=sccache SCCACHE_DIR=/backend/sccache
+ENV CARGO_INCREMENTAL=0 SCCACHE_CACHE_SIZE=30G
 
 WORKDIR /windmill
 
@@ -54,6 +55,7 @@ ENV SQLX_OFFLINE=true
 # ENV CARGO_INCREMENTAL=1
 
 FROM rust_base AS windmill_duckdb_ffi_internal_builder
+ARG DUCKDB_BUILD_JOBS=2
 
 WORKDIR /windmill-duckdb-ffi-internal
 
@@ -63,9 +65,11 @@ RUN apt-get update && apt-get install -y clang=1:19.0* libclang-dev=1:19.0* cmak
 
 COPY ./backend/windmill-duckdb-ffi-internal .
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=$SCCACHE_DIR,sharing=locked \
-    cargo build --release -p windmill_duckdb_ffi_internal
+RUN --mount=type=cache,id=wm-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=wm-duckdb-sccache,target=/backend/sccache \
+    --mount=type=cache,id=wm-duckdb-release,target=/windmill-duckdb-ffi-internal/target \
+    CARGO_BUILD_JOBS=$DUCKDB_BUILD_JOBS cargo build --release -p windmill_duckdb_ffi_internal \
+    && mkdir -p /out && cp target/release/windmill_duckdb_runner /out/windmill_duckdb_runner
 
 FROM node:24-alpine as frontend
 
@@ -73,7 +77,7 @@ FROM node:24-alpine as frontend
 WORKDIR /frontend
 COPY ./frontend/package.json ./frontend/package-lock.json ./frontend/.npmrc ./
 COPY ./frontend/scripts/ ./scripts/
-RUN npm ci
+RUN --mount=type=cache,id=wm-npm,target=/root/.npm npm ci --prefer-offline
 
 # Copy all local files into the image.
 COPY frontend .
@@ -92,7 +96,7 @@ COPY /typescript-client/docs/ /frontend/static/tsdocs/
 COPY /python-client/docs/ /frontend/static/pydocs/
 
 RUN npm run generate-backend-client
-ENV NODE_OPTIONS "--max-old-space-size=8192"
+ENV NODE_OPTIONS="--max-old-space-size=4096"
 # Must be declared for the build-arg to reach the bundle. See frontend/svelte.config.js.
 ARG WM_BUILD_VERSION=""
 ARG VITE_SOURCE_URL="https://github.com/ynonp/windmill"
@@ -119,8 +123,10 @@ RUN apt-get update && apt-get install -y libxml2-dev=2.12.* libxmlsec1-dev=1.2.*
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=$SCCACHE_DIR,sharing=locked \
+RUN --mount=type=cache,id=wm-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=wm-cargo-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=wm-rust-sccache,target=/backend/sccache \
+    --mount=type=cache,id=wm-rust-release,target=/windmill/target \
     CARGO_NET_GIT_FETCH_WITH_CLI=true RUST_BACKTRACE=1 cargo chef cook --release --features "$features" --recipe-path recipe.json
 
 COPY ./openflow.openapi.yaml /openflow.openapi.yaml
@@ -132,21 +138,25 @@ COPY --from=frontend /frontend/build /frontend/build
 COPY --from=frontend /backend/windmill-api/openapi-deref.yaml ./windmill-api/openapi-deref.yaml
 COPY .git/ .git/
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=$SCCACHE_DIR,sharing=locked \
-    CARGO_NET_GIT_FETCH_WITH_CLI=true cargo build --release --features "$features"
+RUN --mount=type=cache,id=wm-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=wm-cargo-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=wm-rust-sccache,target=/backend/sccache \
+    --mount=type=cache,id=wm-rust-release,target=/windmill/target \
+    CARGO_NET_GIT_FETCH_WITH_CLI=true cargo build --release --features "$features" \
+    && mkdir -p /out && cp target/release/windmill /out/windmill \
+    && sccache --show-stats
 
 # Split debug info into a separate file, then strip the binary.
 # The .debug file can be extracted as a CI artifact for production debugging.
 # The debuglink allows gdb to auto-discover the debug file when placed next to the binary.
-RUN objcopy --only-keep-debug /windmill/target/release/windmill /windmill/target/release/windmill.debug \
-    && strip /windmill/target/release/windmill \
-    && objcopy --add-gnu-debuglink=/windmill/target/release/windmill.debug /windmill/target/release/windmill
+RUN objcopy --only-keep-debug /out/windmill /out/windmill.debug \
+    && strip /out/windmill \
+    && objcopy --add-gnu-debuglink=/out/windmill.debug /out/windmill
 
 # Standalone stage for extracting the .debug file without including it in the final image.
 # Build with: docker build --target debuginfo --output type=local,dest=./out .
 FROM scratch AS debuginfo
-COPY --from=builder /windmill/target/release/windmill.debug /windmill.debug
+COPY --from=builder /out/windmill.debug /windmill.debug
 
 FROM ${DEBIAN_IMAGE}
 
@@ -338,9 +348,9 @@ ENV GOCACHE=/tmp/windmill/cache/go
 ENV TZ=Etc/UTC
 
 COPY --from=builder /frontend/build /static_frontend
-COPY --from=builder /windmill/target/release/windmill ${APP}/windmill
+COPY --from=builder /out/windmill ${APP}/windmill
 # DuckDB jobs run in this binary, which the worker looks for next to its own.
-COPY --from=windmill_duckdb_ffi_internal_builder /windmill-duckdb-ffi-internal/target/release/windmill_duckdb_runner ${APP}/windmill_duckdb_runner
+COPY --from=windmill_duckdb_ffi_internal_builder /out/windmill_duckdb_runner ${APP}/windmill_duckdb_runner
 
 COPY --from=oven/bun:1.4.4 /usr/local/bin/bun /usr/bin/bun
 

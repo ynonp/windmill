@@ -17,11 +17,25 @@ Set `WM_BUILD_VERSION` to identify the release. For the slim image, build
 windmill-extra, pass our slim image as `BASE_IMAGE` before building; never use
 the proprietary upstream base.
 
-Production deployment is now defined in `.github/workflows/deploy-oss.yml`
-and `deploy/README.md`: pushes to this fork's main build the published commit,
-publish AGPL-only images to GHCR, and deploy immutable digests through the
-restricted `deploy/github-deploy.sh` receiver. Use the `BASE_IMAGE` build arg
-for both slim and extra Dockerfiles; no Dockerfile text replacement is needed.
+Production builds and deployments run from the development box (modified
+2026-11-12), using `bash deploy/local.sh build` or `bash deploy/local.sh deploy`.
+Both always fetch public `origin/main` and build that exact commit in a clean
+snapshot; arbitrary refs and uncommitted sources are not accepted. Push source
+changes first. GitHub Actions deployment is disabled. See `deploy/README.md`.
+
+Podman's persistent build engine retains image layers, Cargo registry/git,
+release targets, sccache and npm caches. Defaults: four Cargo jobs, two DuckDB
+jobs, two parallel stages. Tune `CARGO_BUILD_JOBS` and `BUILD_STAGES` to available
+RAM. Keep thin LTO and mold; never use `target-cpu=native` for production.
+Do not prune build caches routinely. Clean snapshots, the run lock and timing
+logs live in the sibling `.windmill-build/`, outside this checkout and `/tmp`.
+The 15–20 minute warm-build target must be measured, not assumed.
+
+Deployment streams images over administrator SSH, verifies exact image IDs,
+source/revision labels and public main, backs up PostgreSQL and `.env`, then
+switches Compose and verifies running images and `/api/version`. Concurrent local
+runs are rejected; production uses the shared deployment lock. An advanced main
+aborts the switch. Never automatically downgrade across database migrations.
 
 Publish the complete corresponding source of the running revision, preserve
 license/copyright notices and modification dates, and retain the visible Help →
