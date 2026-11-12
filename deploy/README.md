@@ -34,6 +34,7 @@ Rust installation is used. Run as the same OS user every time. It retains:
 - `wm-cargo-registry`, `wm-cargo-git`, `wm-npm` build cache mounts.
 - Separate `wm-rust-release` and `wm-duckdb-release` Cargo target cache mounts.
 - Separate `wm-rust-sccache` and `wm-duckdb-sccache` compiler caches (30 GB each).
+- Extra-image Go module/compiler, uv, pip and npm caches, reused after base-image changes.
 
 Release targets survive source changes; layers retain stable tools and runtime
 packages. Binaries are copied out of cache mounts before image assembly. Thin

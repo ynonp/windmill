@@ -58,7 +58,10 @@ ENV PATH="${PATH}:/usr/local/go/bin"
 ENV GOBIN=/usr/local/go/bin
 
 # Install gopls for Go LSP
-RUN /usr/local/go/bin/go install -v golang.org/x/tools/gopls@latest
+# Modified 2026-11-12: retain dependency/compiler caches when the application base changes.
+RUN --mount=type=cache,id=wm-extra-go-mod,target=/root/go/pkg/mod \
+    --mount=type=cache,id=wm-extra-go-build,target=/root/.cache/go-build \
+    /usr/local/go/bin/go install -v golang.org/x/tools/gopls@latest
 
 # Copy Deno for Deno LSP
 COPY --from=denoland/deno:2.2.1 --chmod=755 /usr/bin/deno /usr/bin/deno
@@ -71,20 +74,23 @@ ENV PIPENV_VENV_IN_PROJECT=1
 ENV XDG_CACHE_HOME=/pyls/.cache
 
 # Install Python packages for LSP using uv
-RUN uv pip install --system --break-system-packages pipenv tornado python-lsp-jsonrpc ruff==0.16.0 Cython
+RUN --mount=type=cache,id=wm-extra-uv,target=/tmp/windmill/cache/uv \
+    uv pip install --system --break-system-packages pipenv tornado python-lsp-jsonrpc ruff==0.16.0 Cython
 
 # Install Node-based language servers
-RUN npm install -g pyright
+RUN --mount=type=cache,id=wm-npm,target=/root/.npm npm install -g pyright --prefer-offline
 
 # Setup LSP working directory
 WORKDIR /pyls
 COPY lsp/Pipfile .
-RUN pipenv install
+RUN --mount=type=cache,id=wm-extra-pip,target=/root/.cache/pip \
+    PIP_CACHE_DIR=/root/.cache/pip pipenv install
 COPY lsp/pyls_launcher.py .
 
 # Setup Monaco temp directory for LSP
 RUN mkdir -p /tmp/monaco && chmod -R 777 /tmp/monaco
-RUN cd /tmp/monaco && npm install --save-dev windmill-client
+RUN --mount=type=cache,id=wm-npm,target=/root/.npm \
+    cd /tmp/monaco && npm install --save-dev windmill-client --prefer-offline
 
 RUN mkdir -p /pyls/.cache
 
@@ -103,7 +109,8 @@ COPY debugger/registry_config.ts .
 COPY debugger/nsjail.debug.config.proto .
 
 # Install Python debugger dependencies using uv
-RUN uv pip install --system --break-system-packages websockets debugpy
+RUN --mount=type=cache,id=wm-extra-uv,target=/tmp/windmill/cache/uv \
+    uv pip install --system --break-system-packages websockets debugpy
 
 # ============================================================================
 # Multiplayer Setup (y-websocket with connection logging)
@@ -119,7 +126,7 @@ COPY multiplayer/gateway.mjs .
 COPY multiplayer/jwt.mjs .
 
 # Install dependencies
-RUN npm ci --omit=dev
+RUN --mount=type=cache,id=wm-npm,target=/root/.npm npm ci --omit=dev --prefer-offline
 
 # ============================================================================
 # Entrypoint Setup
