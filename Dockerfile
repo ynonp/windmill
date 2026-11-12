@@ -138,7 +138,7 @@ COPY --from=frontend /frontend/build /frontend/build
 COPY --from=frontend /backend/windmill-api/openapi-deref.yaml ./windmill-api/openapi-deref.yaml
 COPY .git/ .git/
 
-ARG APP_BUILD_JOBS=4
+ARG APP_BUILD_JOBS=6
 ENV CARGO_BUILD_JOBS=$APP_BUILD_JOBS
 
 RUN --mount=type=cache,id=wm-cargo-registry,target=/usr/local/cargo/registry \

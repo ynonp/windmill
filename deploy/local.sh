@@ -51,7 +51,7 @@ main() {
         echo "Build snapshot is dirty or has the wrong revision: $src" >&2; return 1;
     }
     local app="localhost/windmill-oss:$REVISION" slim="localhost/windmill-oss-slim:$REVISION" extra="localhost/windmill-oss-extra:$REVISION"
-    local jobs=${CARGO_BUILD_JOBS:-4} stages=${BUILD_STAGES:-2}
+    local jobs=${CARGO_BUILD_JOBS:-6} stages=${BUILD_STAGES:-2}
     [[ "$jobs" =~ ^[1-9][0-9]*$ && "$stages" =~ ^[1-9][0-9]*$ ]] || return 1
     local -a labels=(--label "org.opencontainers.image.source=https://github.com/ynonp/windmill"
         --label "org.opencontainers.image.revision=$REVISION" --label org.opencontainers.image.licenses=AGPL-3.0-only)

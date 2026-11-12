@@ -24,7 +24,7 @@ snapshot; arbitrary refs and uncommitted sources are not accepted. Push source
 changes first. GitHub Actions deployment is disabled. See `deploy/README.md`.
 
 Podman's persistent build engine retains image layers, Cargo registry/git,
-release targets, sccache and npm caches. Defaults: four Cargo jobs, two DuckDB
+release targets, sccache and npm caches. Defaults: six Cargo jobs, two DuckDB
 jobs, two parallel stages. Tune `CARGO_BUILD_JOBS` and `BUILD_STAGES` to available
 RAM. Keep thin LTO and mold; never use `target-cpu=native` for production.
 The final workspace build uses native incremental compilation and bypasses
